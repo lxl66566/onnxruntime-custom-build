@@ -1,0 +1,83 @@
+name: Build Custom ONNX Runtime
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build_ort:
+    name: Build ORT (${{ matrix.arch }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            build_arg: "" # x64 是默认，不需要参数
+            artifact_name: onnxruntime-x64
+          - arch: x86
+            build_arg: "--x86"
+            artifact_name: onnxruntime-x86
+
+    steps:
+      - name: Checkout ONNX Runtime
+        uses: actions/checkout@v5
+        with:
+          repository: microsoft/onnxruntime
+          ref: v1.23.2
+          submodules: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Create Operator Config
+        shell: cmd
+        run: |
+          echo Creating config file...
+          echo ai.onnx;16;Add,Cast,Concat,Constant,ConstantOfShape,Conv,Equal,Gather,Identity,If,LSTM,Not,Pad,Pow,ReduceMean,Relu,Reshape,Shape,Sigmoid,Size,Slice,Sqrt,Squeeze,Transpose,Unsqueeze > custom_ops.config
+          type custom_ops.config
+
+      - name: Build Minimal ORT
+        shell: cmd
+        run: |
+          call .\build.bat ^
+            --config MinSizeRel ^
+            --build_shared_lib ^
+            --parallel ^
+            --skip_tests ^
+            --disable_ml_ops ^
+            --disable_exceptions ^
+            --disable_rtti ^
+            --minimal_build custom_ops ^
+            --include_ops_by_config custom_ops.config ^
+            ${{ matrix.build_arg }}
+
+      - name: Organize Artifacts
+        shell: cmd
+        run: |
+          mkdir output
+          mkdir output\include
+          mkdir output\lib
+          mkdir output\bin
+
+          echo Copying Headers...
+          copy include\onnxruntime\core\session\onnxruntime_c*.h output\include\
+
+          echo Copying Libs and DLLs...
+          if "${{ matrix.arch }}" == "x64" (
+             copy build\Windows\MinSizeRel\MinSizeRel\onnxruntime.dll output\bin\
+             copy build\Windows\MinSizeRel\MinSizeRel\onnxruntime.lib output\lib\
+          ) else (
+             copy build\Windows\MinSizeRel\MinSizeRel\onnxruntime.dll output\bin\
+             copy build\Windows\MinSizeRel\MinSizeRel\onnxruntime.lib output\lib\
+          )
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: output/
